@@ -46,7 +46,7 @@ jobs:
           python -m cocoapatcher.cli.main efi-marketplace list --refresh
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: united-windows-${{ github.sha }}
           path: dist/united.exe
