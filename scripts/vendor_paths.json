@@ -1,0 +1,6 @@
+{
+  "workspace_root": "..",
+  "oclp": "../OpenCore-Legacy-Patcher",
+  "psp_new": "../PatcherSupportPkg_new",
+  "opcore": "../OpCore-Simplify"
+}

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cocoapatcher"
+version = "0.1.0"
+description = "Unified GUI/CLI for OpCore EFI builds, USB boot media, and OCLP embedding (mixed_tahoe)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "mixed_tahoe" }]
+dependencies = [
+    "click>=8.1",
+    "customtkinter>=5.2",
+]
+
+[project.optional-dependencies]
+windows = ["pywin32>=306"]
+
+[project.scripts]
+cocoapatcher-cli = "cocoapatcher.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cocoapatcher*"]
+
+[tool.setuptools.package-data]
+cocoapatcher = ["assets/**/*"]

@@ -1,0 +1,21 @@
+# Build / packaging
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*.spec.bak
+
+# Local cache & vendor copies (use MIXED_TAHOE_ROOT siblings)
+cache/
+OpCore-Simplify/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.pem
