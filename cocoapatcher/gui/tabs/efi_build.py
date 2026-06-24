@@ -20,6 +20,7 @@ from cocoapatcher.gui.widgets.common import MacosVersionPicker
 from cocoapatcher.gui.widgets.device_source import DeviceSourcePanel
 from cocoapatcher.gui.widgets.log_progress import ProgressPanel, ThreadSafeLog, run_in_thread
 from cocoapatcher.gui.widgets.marketplace import MarketplacePanel
+from cocoapatcher.gui.report_workflow import ensure_report_valid_gui
 
 
 class EfiBuildTab(ctk.CTkFrame):
@@ -107,6 +108,16 @@ class EfiBuildTab(ctk.CTkFrame):
             padx=12, pady=16, anchor="w"
         )
 
+    def _ensure_report(self, report: Path) -> Path | None:
+        fixed = ensure_report_valid_gui(
+            report,
+            parent=self.winfo_toplevel(),
+            log=self._log_panel.append,
+        )
+        if fixed and fixed != report:
+            self.device_panel.set_report_path(fixed)
+        return fixed
+
     def _toggle_manual_smbios(self) -> None:
         if self.show_all_smbios_var.get():
             self._manual_frame.pack(fill="x", padx=12, pady=4)
@@ -152,6 +163,14 @@ class EfiBuildTab(ctk.CTkFrame):
                 model = self.device_panel.get_smbios_model() or "MacPro7,1"
                 self.macos_picker.set_choices(self._builder.compatible_macos_for_smbios(model))
             elif report and report.is_file():
+                report = self._ensure_report(report)
+                if not report:
+                    self._compat = None
+                    self.macos_picker.set_choices([])
+                    self._compat_label.configure(
+                        text="Fix GPU entries in the hardware report to continue."
+                    )
+                    return
                 self._compat = self._builder.analyze_device(report)
                 if self._compat.boot_blocked:
                     self.macos_picker.set_choices([])
@@ -240,6 +259,9 @@ class EfiBuildTab(ctk.CTkFrame):
 
         if not report or not report.is_file():
             self._log_panel.append("Load or export a Hardware Sniffer report.")
+            return
+        report = self._ensure_report(Path(report))
+        if not report:
             return
         if not macos or macos.startswith("("):
             self._log_panel.append("Select a compatible macOS version.")

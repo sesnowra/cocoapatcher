@@ -21,6 +21,7 @@ from cocoapatcher.gui.widgets.common import MacosVersionPicker
 from cocoapatcher.gui.widgets.device_source import DeviceSourcePanel
 from cocoapatcher.gui.widgets.log_progress import ProgressPanel, ThreadSafeLog, run_in_thread
 from cocoapatcher.gui.widgets.marketplace import MarketplacePanel
+from cocoapatcher.gui.report_workflow import ensure_report_valid_gui
 
 
 class EasyModeTab(ctk.CTkFrame):
@@ -92,6 +93,16 @@ class EasyModeTab(ctk.CTkFrame):
             height=36,
         ).pack(anchor="w", padx=12, pady=16)
 
+    def _ensure_report(self, report: Path) -> Path | None:
+        fixed = ensure_report_valid_gui(
+            report,
+            parent=self.winfo_toplevel(),
+            log=self._log_panel.append,
+        )
+        if fixed and fixed != report:
+            self.device_panel.set_report_path(fixed)
+        return fixed
+
     def _on_device_changed(self) -> None:
         self._refresh_from_device()
 
@@ -113,6 +124,14 @@ class EasyModeTab(ctk.CTkFrame):
                     text=f"Real Mac SMBIOS {model}: macOS versions officially supported by this model."
                 )
             elif report and report.is_file():
+                report = self._ensure_report(report)
+                if not report:
+                    self._compat = None
+                    self.macos_picker.set_choices([])
+                    self._compat_label.configure(
+                        text="Fix GPU entries in the hardware report to continue."
+                    )
+                    return
                 self._compat = self._builder.analyze_device(report)
                 if self._compat.boot_blocked:
                     self.macos_picker.set_choices([])
@@ -186,6 +205,9 @@ class EasyModeTab(ctk.CTkFrame):
 
         if source != DeviceSource.REAL_MAC and (not report or not report.is_file()):
             self._log_panel.append("Load or export a Hardware Sniffer report first.")
+            return
+        report = self._ensure_report(Path(report))
+        if not report:
             return
         if source == DeviceSource.REAL_MAC and (not report or not report.is_file()):
             self._log_panel.append(

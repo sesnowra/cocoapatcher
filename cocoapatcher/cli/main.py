@@ -78,6 +78,115 @@ def efi_marketplace_match(report_path, refresh):
         click.echo(f"score={entry.score}\t{entry.id}\t{entry.name}")
 
 
+@cli.command("fix-report")
+@click.option("--report", "report_path", required=True, type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write fixed JSON here (default: overwrite input report)",
+)
+@click.option(
+    "--remove-junk",
+    is_flag=True,
+    help="Remove placeholder GPUs (e.g. Microsoft Basic Display) without prompting",
+)
+def fix_report_cmd(report_path, output, remove_junk):
+    """Interactively fix invalid GPU entries in a Hardware Sniffer report."""
+    from cocoapatcher.core.hardware_report import load_report_json
+    from cocoapatcher.core.report_validation import (
+        VALID_GPU_DEVICE_TYPES,
+        VALID_GPU_MANUFACTURERS,
+        GpuFixItem,
+        apply_gpu_edit,
+        inspect_gpu_entries,
+        save_report_json,
+        validate_report_dict,
+        validate_report_file,
+    )
+
+    report_path = report_path.resolve()
+    out_path = (output or report_path).resolve()
+    data = load_report_json(report_path)
+    ok, errors, _warnings, _ = validate_report_file(report_path)
+    if ok:
+        click.echo(f"Report is already valid: {report_path}")
+        return
+
+    items = inspect_gpu_entries(data)
+    if not items:
+        raise click.ClickException("; ".join(errors))
+
+    if remove_junk:
+        for item in [i for i in items if i.suggest_remove]:
+            data = apply_gpu_edit(data, item.name, remove=True)
+        items = inspect_gpu_entries(data)
+        if not items:
+            ok, errors, warnings, _ = validate_report_dict(data)
+            if not ok:
+                raise click.ClickException("; ".join(errors))
+            for warning in warnings:
+                click.echo(f"warning: {warning}")
+            save_report_json(out_path, data)
+            click.echo(f"Saved fixed report: {out_path}")
+            return
+
+    click.echo("Invalid GPU entries (manual input required):")
+    for item in items:
+        click.echo(f"  - {item.name}: {', '.join(item.issues)}")
+        if item.suggest_remove:
+            click.echo("    (recommended: remove — placeholder display adapter)")
+
+    for item in items:
+        click.echo("")
+        click.echo(f"GPU: {item.name}")
+        if click.confirm("Remove this GPU from the report?", default=item.suggest_remove):
+            data = apply_gpu_edit(data, item.name, remove=True)
+            continue
+
+        manufacturer = click.prompt(
+            "Manufacturer",
+            type=click.Choice(sorted(VALID_GPU_MANUFACTURERS), case_sensitive=False),
+            default=item.props.get("Manufacturer")
+            if item.props.get("Manufacturer") in VALID_GPU_MANUFACTURERS
+            else "AMD",
+        )
+        codename = click.prompt(
+            "Codename",
+            default=str(item.props.get("Codename") or "Unknown"),
+        )
+        device_type = click.prompt(
+            "Device Type",
+            type=click.Choice(sorted(VALID_GPU_DEVICE_TYPES), case_sensitive=False),
+            default=item.props.get("Device Type")
+            if item.props.get("Device Type") in VALID_GPU_DEVICE_TYPES
+            else "Discrete GPU",
+        )
+        data = apply_gpu_edit(
+            data,
+            item.name,
+            manufacturer=manufacturer,
+            codename=codename,
+            device_type=device_type,
+        )
+
+    remaining = inspect_gpu_entries(data)
+    if remaining:
+        raise click.ClickException(
+            "Some GPU entries are still invalid: "
+            + ", ".join(i.name for i in remaining)
+        )
+
+    ok, errors, warnings, _ = validate_report_dict(data)
+    if not ok:
+        raise click.ClickException("; ".join(errors))
+    for warning in warnings:
+        click.echo(f"warning: {warning}")
+
+    save_report_json(out_path, data)
+    click.echo(f"Saved fixed report: {out_path}")
+
+
 @cli.command("device-compat")
 @click.option("--report", "report_path", required=True, type=click.Path(exists=True, path_type=Path))
 def device_compat_cmd(report_path):
@@ -155,18 +264,24 @@ def export_report_cmd(output_dir, force_download, macos_version):
 )
 def build_efi(report_path, macos_version, output_dir, smbios, smbios_profile):
     """Build OpenCore EFI via OpCore-Simplify (headless)."""
+    from cocoapatcher.core.report_validation import ReportValidationError
     from cocoapatcher.core.smbios_picker import SmbiosProfile
 
     macos_version = _resolve_macos_choice(macos_version)
     profile = SmbiosProfile(smbios_profile.lower())
     builder = EfiBuilder(log=click.echo)
-    result = builder.build(
-        report_path,
-        macos_version,
-        output_dir=output_dir,
-        smbios_model=smbios,
-        smbios_profile=profile,
-    )
+    try:
+        result = builder.build(
+            report_path,
+            macos_version,
+            output_dir=output_dir,
+            smbios_model=smbios,
+            smbios_profile=profile,
+        )
+    except ReportValidationError as exc:
+        raise click.ClickException(
+            f"{exc}\nRun: united.exe fix-report --report \"{report_path}\""
+        ) from exc
     click.echo(f"EFI written to {result.output_dir}")
     click.echo(
         f"needs_oclp={result.needs_oclp} smbios={result.smbios_model} "

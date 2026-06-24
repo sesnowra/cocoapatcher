@@ -13,6 +13,7 @@ from typing import Any, Callable, Optional
 
 from cocoapatcher import paths
 from cocoapatcher.core.hardware_report import load_report_json
+from cocoapatcher.core.report_validation import ReportValidationError, validate_report_file
 from cocoapatcher.core.smbios_picker import SmbiosProfile, list_models, resolve_smbios, suggest_model
 from cocoapatcher.core.efi_marketplace import (
     MarketplaceEntry,
@@ -118,10 +119,9 @@ class EfiBuilder:
 
     def load_report(self, report_path: Path) -> dict[str, Any]:
         report_path = report_path.resolve()
-        ocpe = self._ensure_ocpe()
-        ok, errors, warnings, data = ocpe.v.validate_report(str(report_path))
+        ok, errors, warnings, data = validate_report_file(report_path)
         if not ok or data is None:
-            raise ValueError("Invalid hardware report: " + "; ".join(errors))
+            raise ReportValidationError(errors, report_path)
         for warning in warnings:
             self._log(f"Report warning: {warning}")
         return data
