@@ -23,10 +23,12 @@ from cocoapatcher.core.device_compatibility import (
     DeviceCompatibility,
     DeviceCompatibilityError,
     analyze_hardware_report,
+    assert_version_allowed,
     compatible_macos_choices,
     needs_oclp_for_version,
     oclp_required_readonly,
 )
+from cocoapatcher.core.oclp_targeting import apply_oclp_for_target
 
 LogCallback = Callable[[str], None]
 ProgressCallback = Callable[[str, int, int], None]
@@ -172,6 +174,12 @@ class EfiBuilder:
         hardware_report = self.load_report(report_path)
         self._log(f"Loaded hardware report: {report_path}")
 
+        compat = analyze_hardware_report(hardware_report)
+        assert_version_allowed(compat, macos_version)
+        unofficial_oclp = needs_oclp_for_version(compat, macos_version)
+        if unofficial_oclp:
+            self._log("Target macOS is in OCLP unofficial support tier - root patches required.")
+
         with _headless_opcore(ocpe, self._log):
             hardware_report, native_macos_version, ocl_patched = ocpe.c.check_compatibility(
                 hardware_report
@@ -196,6 +204,16 @@ class EfiBuilder:
             needs_oclp = ocpe.k.select_required_kexts(
                 customized, macos_version, needs_oclp, ocpe.ac.patches
             )
+            if unofficial_oclp:
+                needs_oclp = True
+            if needs_oclp:
+                apply_oclp_for_target(
+                    compat,
+                    macos_version,
+                    smbios_model,
+                    force=not unofficial_oclp,
+                    log=self._log,
+                )
             ocpe.s.smbios_specific_options(
                 customized, smbios_model, macos_version, ocpe.ac.patches, ocpe.k
             )

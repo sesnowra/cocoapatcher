@@ -18,6 +18,9 @@ class MacosVersionChoice:
     darwin_major: int
 
 
+_CACHED_CHOICES: tuple[MacosVersionChoice, ...] | None = None
+
+
 def _load_opcore_os_data():
     try:
         paths.add_opcore_to_syspath()
@@ -28,7 +31,7 @@ def _load_opcore_os_data():
         return None
 
 
-def list_macos_version_choices(*, include_beta: bool = True) -> list[MacosVersionChoice]:
+def _build_macos_version_choices(*, include_beta: bool = True) -> list[MacosVersionChoice]:
     os_data = _load_opcore_os_data()
     choices: list[MacosVersionChoice] = []
     if os_data is not None:
@@ -57,6 +60,17 @@ def list_macos_version_choices(*, include_beta: bool = True) -> list[MacosVersio
                 darwin_major=darwin,
             )
         )
+    return choices
+
+
+def list_macos_version_choices(*, include_beta: bool = True) -> list[MacosVersionChoice]:
+    """Return macOS picker choices (cached before OpCore may touch pathlib)."""
+    global _CACHED_CHOICES
+    if _CACHED_CHOICES is None:
+        _CACHED_CHOICES = tuple(_build_macos_version_choices(include_beta=True))
+    choices = list(_CACHED_CHOICES)
+    if not include_beta:
+        choices = [c for c in choices if "(Beta)" not in c.label]
     return choices
 
 
@@ -91,11 +105,10 @@ def normalize_macos_version(value: str) -> str:
     if len(parts) == 3 and all(p.isdigit() for p in parts):
         major = int(parts[0])
         if major >= 11:
-            os_data = _load_opcore_os_data()
-            if os_data is not None:
-                for info in os_data.macos_versions:
-                    if info.macos_version == str(major) or info.macos_version == raw:
-                        return f"{info.darwin_version}.99.99"
+            for choice in list_macos_version_choices():
+                marketing_major = choice.version.split(".")[0]
+                if marketing_major.isdigit() and int(marketing_major) == major:
+                    return f"{choice.darwin_major}.99.99"
             from cocoapatcher.core.opcore_static import MACOS_VERSIONS
 
             for _name, version, darwin in MACOS_VERSIONS:

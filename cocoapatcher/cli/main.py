@@ -83,20 +83,25 @@ def efi_marketplace_match(report_path, refresh):
 def device_compat_cmd(report_path):
     """Show macOS versions compatible with a hardware report."""
     from cocoapatcher.core.device_compatibility import (
+        VersionSupport,
         analyze_hardware_report,
+        classify_version,
         compatible_macos_choices,
-        needs_oclp_for_version,
+        support_summary,
     )
     from cocoapatcher.core.hardware_report import load_report_json
 
     profile = analyze_hardware_report(load_report_json(report_path))
-    click.echo(f"native={profile.native_min}…{profile.native_max}")
+    click.echo(support_summary(profile))
+    if profile.boot_blocked:
+        return
+    click.echo(f"darwin native={profile.native_min}...{profile.native_max}")
     if profile.oclp_range:
-        click.echo(f"oclp={profile.oclp_range[1]}…{profile.oclp_range[0]}")
+        click.echo(f"darwin oclp={profile.oclp_range[1]}...{profile.oclp_range[0]}")
     click.echo(f"suggested={profile.suggested_version}")
     for choice in compatible_macos_choices(profile):
-        oclp = " oclp=1" if needs_oclp_for_version(profile, choice.version) else ""
-        click.echo(f"{choice.label}\t{choice.version}{oclp}")
+        tier = classify_version(profile, choice.version)
+        click.echo(f"{choice.label}\t{choice.version}\t{tier.value}")
 
 
 @cli.command("list-macos")

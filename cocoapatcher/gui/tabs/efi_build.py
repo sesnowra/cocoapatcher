@@ -10,6 +10,7 @@ from cocoapatcher.core.device_compatibility import (
     DeviceCompatibilityError,
     compatible_macos_choices,
     oclp_required_readonly,
+    support_summary,
 )
 from cocoapatcher.core.device_source import DeviceSource
 from cocoapatcher.core.efi_builder import EfiBuilder
@@ -53,6 +54,15 @@ class EfiBuildTab(ctk.CTkFrame):
         )
         self.macos_picker.pack(fill="x", padx=12, pady=(8, 4))
 
+        self._compat_label = ctk.CTkLabel(
+            self,
+            text="",
+            text_color="gray",
+            wraplength=760,
+            justify="left",
+        )
+        self._compat_label.pack(anchor="w", padx=12, pady=4)
+
         self.show_all_smbios_var = ctk.BooleanVar(value=False)
         self._advanced_smbios = ctk.CTkFrame(self, fg_color="transparent")
         self._advanced_smbios.pack(fill="x", padx=12, pady=4)
@@ -78,7 +88,7 @@ class EfiBuildTab(ctk.CTkFrame):
         self.oclp_var = ctk.BooleanVar(value=False)
         self.oclp_check = ctk.CTkCheckBox(
             self,
-            text="Requires OpenCore Legacy Patcher",
+            text="OpenCore Legacy Patcher root patches (unofficial macOS)",
             variable=self.oclp_var,
         )
         self.oclp_check.pack(anchor="w", padx=12, pady=4)
@@ -143,17 +153,23 @@ class EfiBuildTab(ctk.CTkFrame):
                 self.macos_picker.set_choices(self._builder.compatible_macos_for_smbios(model))
             elif report and report.is_file():
                 self._compat = self._builder.analyze_device(report)
-                choices = compatible_macos_choices(self._compat)
-                self.macos_picker.set_choices(choices)
-                if self._compat.suggested_version:
-                    self.macos_picker.set_version(self._compat.suggested_version)
-                macos = self.macos_picker.get_version()
-                self.device_panel.set_auto_smbios(
-                    self._builder.suggest_smbios(report, macos)
-                )
+                if self._compat.boot_blocked:
+                    self.macos_picker.set_choices([])
+                    self._compat_label.configure(text=support_summary(self._compat))
+                else:
+                    choices = compatible_macos_choices(self._compat)
+                    self.macos_picker.set_choices(choices)
+                    if self._compat.suggested_version:
+                        self.macos_picker.set_version(self._compat.suggested_version)
+                    macos = self.macos_picker.get_version()
+                    self.device_panel.set_auto_smbios(
+                        self._builder.suggest_smbios(report, macos)
+                    )
+                    self._compat_label.configure(text=support_summary(self._compat))
             else:
                 self._compat = None
                 self.macos_picker.set_choices([])
+                self._compat_label.configure(text="")
         except DeviceCompatibilityError as exc:
             self._compat = None
             self.macos_picker.set_choices([])

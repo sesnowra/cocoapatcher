@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from cocoapatcher import paths
@@ -19,6 +20,14 @@ class DeviceCompatibilityError(RuntimeError):
     pass
 
 
+class VersionSupport(str, Enum):
+    """How a macOS target is supported on this hardware."""
+
+    NATIVE = "native"
+    OCLP_UNOFFICIAL = "oclp_unofficial"
+    BLOCKED = "blocked"
+
+
 @dataclass
 class DeviceCompatibility:
     """macOS ranges for a hardware report after OpCore compatibility pass."""
@@ -28,6 +37,8 @@ class DeviceCompatibility:
     native_max: str
     oclp_range: tuple[str, str] | None = None
     suggested_version: str = ""
+    boot_blocked: bool = False
+    boot_block_reason: str = ""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -45,6 +56,64 @@ def _in_range(target: str, low: str, high: str) -> bool:
     u = utils.Utils()
     t = u.parse_darwin_version(target)
     return u.parse_darwin_version(low) <= t <= u.parse_darwin_version(high)
+
+
+def precheck_boot_cutoff(hardware_report: dict[str, Any]) -> str | None:
+    """Hard cutoffs before OpCore enrichment (CPU instructions / impossible boot only)."""
+    cpu = hardware_report.get("CPU") or {}
+    simd = str(cpu.get("SIMD Features", ""))
+    if "SSE4" not in simd:
+        return "CPU lacks SSE4 - macOS cannot boot on this processor."
+
+    gpus = hardware_report.get("GPU") or {}
+    if not gpus:
+        return "No GPU in hardware report - export report with GPU information."
+
+    usable = [
+        props
+        for props in gpus.values()
+        if props.get("Device Type") in ("Discrete GPU", "Integrated GPU")
+        and str(props.get("Manufacturer", "")) not in ("", "Unknown")
+    ]
+    if not usable:
+        return "No usable GPU in hardware report - cannot boot macOS."
+
+    for _name, ctrl in (hardware_report.get("Storage Controllers") or {}).items():
+        if ctrl.get("Bus Type") != "PCI":
+            continue
+        paths.add_opcore_to_syspath()
+        from Scripts.datasets import pci_data
+
+        if ctrl.get("Device ID") in pci_data.IntelVMDIDs:
+            return "Intel VMD is enabled - disable VMD in BIOS and re-export the report."
+
+    return None
+
+
+def _merge_oclp_range_from_report(report: dict[str, Any]) -> tuple[str, str] | None:
+    paths.add_opcore_to_syspath()
+    from Scripts import utils
+
+    u = utils.Utils()
+    merged_max: str | None = None
+    merged_min: str | None = None
+    for block in report.values():
+        if not isinstance(block, dict):
+            continue
+        for props in block.values():
+            if not isinstance(props, dict):
+                continue
+            oclp = props.get("OCLP Compatibility")
+            if not oclp or oclp[0] is None:
+                continue
+            o_max, o_min = oclp[0], oclp[1]
+            if merged_max is None or u.parse_darwin_version(o_max) > u.parse_darwin_version(merged_max):
+                merged_max = o_max
+            if merged_min is None or u.parse_darwin_version(o_min) < u.parse_darwin_version(merged_min):
+                merged_min = o_min
+    if merged_max and merged_min:
+        return (merged_max, merged_min)
+    return None
 
 
 def _suggest_darwin_version(hardware_report: dict[str, Any], native_max: str) -> str:
@@ -92,7 +161,9 @@ def _run_compatibility_checker(hardware_report: dict[str, Any]) -> tuple[dict, t
     original_head = utils.Utils.head
 
     def _raise_exit(*_a, **_k):
-        raise DeviceCompatibilityError("Hardware is not compatible with any supported macOS version.")
+        raise DeviceCompatibilityError(
+            "Hardware cannot boot macOS (missing SSE4, unsupported GPU, or blocked storage)."
+        )
 
     utils.Utils.exit_program = _raise_exit
     utils.Utils.request_input = lambda *_a, **_k: ""
@@ -108,8 +179,30 @@ def _run_compatibility_checker(hardware_report: dict[str, Any]) -> tuple[dict, t
 
 
 def analyze_hardware_report(hardware_report: dict[str, Any]) -> DeviceCompatibility:
-    report, native, oclp = _run_compatibility_checker(hardware_report)
+    list_macos_version_choices()
+
+    reason = precheck_boot_cutoff(hardware_report)
+    if reason:
+        return DeviceCompatibility(
+            hardware_report=hardware_report,
+            native_min="0.0.0",
+            native_max="0.0.0",
+            boot_blocked=True,
+            boot_block_reason=reason,
+        )
+
+    try:
+        report, native, oclp_checker = _run_compatibility_checker(hardware_report)
+    except DeviceCompatibilityError as exc:
+        return DeviceCompatibility(
+            hardware_report=hardware_report,
+            native_min="0.0.0",
+            native_max="0.0.0",
+            boot_blocked=True,
+            boot_block_reason=str(exc),
+        )
     native_min, native_max = native
+    oclp = _merge_oclp_range_from_report(report) or oclp_checker
     suggested = _suggest_darwin_version(report, native_max)
     return DeviceCompatibility(
         hardware_report=report,
@@ -129,34 +222,81 @@ def _darwin_to_marketing_choice(darwin_version: str) -> MacosVersionChoice:
     return choices[-1]
 
 
+def _device_needs_oclp_for_darwin(profile: DeviceCompatibility, darwin: str) -> bool:
+    """True when a device needs OCLP root patches for this darwin version."""
+    for block_name in ("GPU", "Network", "Bluetooth", "SD Controller"):
+        block = profile.hardware_report.get(block_name)
+        if not isinstance(block, dict):
+            continue
+        for props in block.values():
+            if not isinstance(props, dict):
+                continue
+            oclp = props.get("OCLP Compatibility")
+            if not oclp or oclp[0] is None:
+                continue
+            if not _in_range(darwin, oclp[1], oclp[0]):
+                continue
+            compat = props.get("Compatibility", (None, None))
+            if compat == (None, None) or compat[0] is None:
+                return True
+            if not _in_range(darwin, compat[1], compat[0]):
+                return True
+    return False
+
+
+def classify_version(profile: DeviceCompatibility, macos_version: str) -> VersionSupport:
+    if profile.boot_blocked:
+        return VersionSupport.BLOCKED
+    darwin = to_darwin_version(macos_version)
+    in_native = _in_range(darwin, profile.native_min, profile.native_max)
+    if in_native:
+        if _device_needs_oclp_for_darwin(profile, darwin):
+            return VersionSupport.OCLP_UNOFFICIAL
+        return VersionSupport.NATIVE
+    if profile.oclp_range and _in_range(darwin, profile.oclp_range[1], profile.oclp_range[0]):
+        return VersionSupport.OCLP_UNOFFICIAL
+    return VersionSupport.BLOCKED
+
+
 def compatible_macos_choices(
     profile: DeviceCompatibility | None = None,
     *,
     smbios_model: str | None = None,
 ) -> list[MacosVersionChoice]:
-    """Device- or SMBIOS-filtered macOS targets (10.13 … 26)."""
+    """Device- or SMBIOS-filtered macOS targets (minimum native … unofficial OCLP ceiling)."""
     all_choices = list_macos_version_choices()
     if profile is not None:
+        if profile.boot_blocked:
+            return []
         min_major = _parse_major(profile.native_min)
-        max_major = _parse_major(profile.native_max)
+        max_native = _parse_major(profile.native_max)
         oclp_min = oclp_max = None
         if profile.oclp_range:
             oclp_max = _parse_major(profile.oclp_range[0])
             oclp_min = _parse_major(profile.oclp_range[1])
+        ceiling = max_native
+        if oclp_max is not None:
+            ceiling = max(ceiling, oclp_max)
+
         result: list[MacosVersionChoice] = []
         for choice in all_choices:
             d = choice.darwin_major
-            native_ok = min_major <= d <= max_major
-            oclp_ok = oclp_min is not None and oclp_max is not None and oclp_min <= d <= oclp_max
-            if native_ok or oclp_ok:
-                suffix = " — Requires OCLP" if oclp_ok and not native_ok else ""
-                result.append(
-                    MacosVersionChoice(
-                        label=f"{choice.label}{suffix}",
-                        version=choice.version,
-                        darwin_major=choice.darwin_major,
-                    )
+            if d < min_major or d > ceiling:
+                continue
+            tier = classify_version(profile, choice.version)
+            if tier == VersionSupport.BLOCKED:
+                continue
+            if tier == VersionSupport.OCLP_UNOFFICIAL:
+                suffix = " - OCLP unofficial"
+            else:
+                suffix = ""
+            result.append(
+                MacosVersionChoice(
+                    label=f"{choice.label}{suffix}",
+                    version=choice.version,
+                    darwin_major=choice.darwin_major,
                 )
+            )
         return result
 
     if smbios_model:
@@ -175,31 +315,36 @@ def compatible_macos_choices(
     return all_choices
 
 
+def support_summary(profile: DeviceCompatibility) -> str:
+    if profile.boot_blocked:
+        return profile.boot_block_reason or "Boot blocked."
+    lo = _darwin_to_marketing_choice(profile.native_min)
+    hi = _darwin_to_marketing_choice(profile.native_max)
+    parts = [f"Minimum supported: {lo.label} - {hi.label} (native)"]
+    if profile.oclp_range:
+        o_hi = _darwin_to_marketing_choice(profile.oclp_range[0])
+        parts.append(f"Unofficial (OCLP root patch): up to {o_hi.label}")
+    return " | ".join(parts)
+
+
 def needs_oclp_for_version(
     profile: DeviceCompatibility,
     macos_version: str,
 ) -> bool:
-    """True when target macOS is only supported via OCLP patching."""
-    darwin = to_darwin_version(macos_version)
-    in_native = _in_range(darwin, profile.native_min, profile.native_max)
-    if in_native:
-        return False
-    if not profile.oclp_range:
-        return False
-    oclp_max, oclp_min = profile.oclp_range
-    if not _in_range(darwin, oclp_min, oclp_max):
-        return False
-    for device_type in ("GPU", "Network", "Bluetooth", "SD Controller"):
-        block = profile.hardware_report.get(device_type)
-        if not isinstance(block, dict):
-            continue
-        for props in block.values():
-            oclp = props.get("OCLP Compatibility")
-            if oclp and _in_range(darwin, oclp[1], oclp[0]):
-                return True
-    return True
+    """True when target macOS requires OCLP root patching (unofficial tier)."""
+    return classify_version(profile, macos_version) == VersionSupport.OCLP_UNOFFICIAL
 
 
 def oclp_required_readonly(profile: DeviceCompatibility, macos_version: str) -> bool:
-    """OCLP checkbox should be forced on and read-only."""
+    """OCLP checkbox forced on (unofficial-only macOS)."""
     return needs_oclp_for_version(profile, macos_version)
+
+
+def assert_version_allowed(profile: DeviceCompatibility, macos_version: str) -> None:
+    tier = classify_version(profile, macos_version)
+    if tier == VersionSupport.BLOCKED:
+        if profile.boot_blocked:
+            raise DeviceCompatibilityError(profile.boot_block_reason)
+        raise DeviceCompatibilityError(
+            f"macOS {macos_version} is outside native and OCLP unofficial support for this hardware."
+        )

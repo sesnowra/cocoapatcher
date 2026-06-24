@@ -41,7 +41,6 @@ class MarketplacePanel(ctk.CTkFrame):
         self._log = log or (lambda _m: None)
         self._entries: list[MarketplaceEntry] = []
         self._selected: MarketplaceEntry | None = None
-        self._options = MarketplaceRefOptions()
 
         ctk.CTkLabel(
             self,
