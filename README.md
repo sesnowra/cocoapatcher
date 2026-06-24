@@ -1,8 +1,20 @@
 # cocoapatcher
 
-Unified **GUI + CLI** for the [mixed_tahoe](../) workspace: OpCore-Simplify EFI builds, GPT/MBR USB boot media, and OpenCore Legacy Patcher embedding with **PatcherSupportPkg_new**.
+[![CI](https://github.com/sesnowra/cocoapatcher/actions/workflows/ci.yml/badge.svg)](https://github.com/sesnowra/cocoapatcher/actions/workflows/ci.yml)
+[![Release](https://github.com/sesnowra/cocoapatcher/actions/workflows/release.yml/badge.svg)](https://github.com/sesnowra/cocoapatcher/actions/workflows/release.yml)
+
+Unified **GUI + CLI** for the [mixed_tahoe](https://github.com/sesnowra/cocoapatcher) workspace: OpCore-Simplify EFI builds, GPT/MBR USB boot media, and OpenCore Legacy Patcher embedding with **PatcherSupportPkg_new**.
 
 **License:** [MIT](LICENSE) — see [Open source & licenses](#license) for third-party components.
+
+## Download (Windows)
+
+Pre-built **`united.exe`** (single-file GUI + CLI) is published on [GitHub Releases](https://github.com/sesnowra/cocoapatcher/releases).
+
+1. Download `united.exe` from the latest release.
+2. Place it in your **mixed_tahoe** folder next to `OpenCore-Legacy-Patcher`, `OpCore-Simplify`, and `PatcherSupportPkg_new` (or set `MIXED_TAHOE_ROOT`).
+
+CI builds every push to `main`; tagging `v*` (e.g. `v0.1.0`) triggers a release build automatically.
 
 ## Requirements
 
